@@ -34,8 +34,8 @@ app = FastAPI(
 # Allow all frontends (local + Netlify + future)
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=".*",   # allow any origin
-    allow_credentials=True,
+    allow_origins=["*"],       # allow any origin
+    allow_credentials=False,   # must be False when using "*"
     allow_methods=["*"],
     allow_headers=["*"],
 )
