@@ -353,7 +353,7 @@ function App() {
     <div className="app-root">
       <header className="app-header">
         <div>
-          <h1>Rolling Put Opportunities</h1>
+          <h1>Put Oportunity Finder</h1>
           <p className="subtitle">
             Scan short put opportunities around the lower band using delta and
             credit filters.
