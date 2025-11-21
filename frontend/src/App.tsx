@@ -139,20 +139,39 @@ function formatTime(date: Date | null): string {
 // Build list of expirations: base, base+7d, base+14d, ...
 function buildExpirationList(base: string, count: number): string[] {
   const result: string[] = [];
-  const baseDate = new Date(base);
-  if (Number.isNaN(baseDate.getTime())) {
+
+  // Parse YYYY-MM-DD manually
+  const parts = base.split("-");
+  if (parts.length !== 3) {
     // Fallback: if base is invalid, just repeat it
     for (let i = 0; i < count; i++) result.push(base);
     return result;
   }
+
+  const [yStr, mStr, dStr] = parts;
+  const y = Number(yStr);
+  const m = Number(mStr);
+  const d = Number(dStr);
+
+  if (!y || !m || !d) {
+    for (let i = 0; i < count; i++) result.push(base);
+    return result;
+  }
+
+  // Use a UTC date to avoid timezone shifts
+  const baseDate = new Date(Date.UTC(y, m - 1, d));
+
   for (let i = 0; i < count; i++) {
-    const d = new Date(baseDate);
-    d.setDate(baseDate.getDate() + 7 * i);
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
+    const dt = new Date(baseDate);
+    dt.setUTCDate(baseDate.getUTCDate() + 7 * i);
+
+    const yyyy = dt.getUTCFullYear();
+    const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getUTCDate()).padStart(2, "0");
+
     result.push(`${yyyy}-${mm}-${dd}`);
   }
+
   return result;
 }
 
