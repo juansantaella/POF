@@ -3,9 +3,11 @@ backend/__pycache__/
 backend/*.pyc
 backend/.venv/
 backend/venv/
-backend/*.env
-backend/Polygon_API_Key.env
 
+# Archivos .env SENSIBLES del backend (no se suben)
+backend/Tradier_API_key.env
+backend/Massive_API_Key.env
+backend/Polygon_API_Key.env
 
 # Node / Vite
 frontend/node_modules/

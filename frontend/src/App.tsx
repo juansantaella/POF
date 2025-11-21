@@ -85,6 +85,18 @@ function classifyRow(row: OpportunityRow): Classification {
   return "neighbor";
 }
 
+function formatProviderLabel(p: string | null): string {
+  if (!p) return "Unknown (check backend)";
+
+  const v = p.toLowerCase();
+  if (v === "tradier_sandbox") return "Tradier (sandbox / paper)";
+  if (v === "tradier_production") return "Tradier (live)";
+  if (v === "massive") return "Massive (options & greeks, snapshot/delayed)";
+  if (v === "yahoo") return "Yahoo Finance (delayed / informational)";
+
+  return p; // fallback: show raw value
+}
+
 function scoreForClassification(c: Classification): string {
   if (c === "best") return "★";
   if (c === "strong") return "✓";
@@ -144,6 +156,7 @@ function buildExpirationList(base: string, count: number): string[] {
   return result;
 }
 
+
 // ---------- Component ----------
 
 function App() {
@@ -164,6 +177,9 @@ function App() {
   const [showNeighbors, setShowNeighbors] = useState(true);
   const [liveUpdate, setLiveUpdate] = useState(false);
   const [profile, setProfile] = useState<Profile>("Normal");
+
+  // NEW: Provider info
+  const [dataProvider, setDataProvider] = useState<string | null>(null);
 
   // Data / status
   const [records, setRecords] = useState<RollingResponse[]>([]);
@@ -256,6 +272,23 @@ function App() {
     };
     fetchAll(params);
   }
+
+  // Fetch backend info (including active data provider) once on mount
+  useEffect(() => {
+    async function fetchBackendInfo() {
+      try {
+        const resp = await fetch(`${API_BASE}/`);
+        if (!resp.ok) return;
+        const json = await resp.json();
+        if (json && typeof json.data_provider === "string") {
+          setDataProvider(json.data_provider);
+        }
+      } catch {
+        // si falla, simplemente dejamos dataProvider como null
+      }
+    }
+    fetchBackendInfo();
+  }, []);
 
   // Auto-refresh timer
   useEffect(() => {
@@ -651,7 +684,7 @@ function App() {
           <h2>Opportunities</h2>
 
           <p className="hint">
-            Data source: Massive (options & greeks, snapshot/delayed).
+            Data source: {formatProviderLabel(dataProvider)}.
           </p>
 
           {error && <div className="error-banner">Error: {error}</div>}

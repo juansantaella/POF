@@ -1,54 +1,20 @@
+# backend/main.py
 import os
 import math
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
 
-import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
-# ---- Load environment variables (works locally and in deployment) ----
+from providers import OptionContract, resolve_get_option_chain
+
+# ---- Load environment variables for strategy defaults ----
 BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / "Polygon_API_Key.env")
 load_dotenv(BASE_DIR / "strategy_defaults.env")
 
-API_KEY = os.getenv("POLYGON_API_KEY")
-
-if not API_KEY:
-    raise RuntimeError(
-        "POLYGON_API_KEY is not set. Check Polygon_API_Key.env "
-        "or the host environment variables."
-    )
-
-BASE_URL = "https://api.massive.com"
-RISK_FREE_RATE = 0.04  # 4% annual risk-free rate (rough approximation)
-
-# >>> Create the FastAPI app first <<<
-app = FastAPI(
-    title="Polygon / Massive backend",
-    description="Backend for rolling short PUT strategy helper.",
-    version="1.0.0",
-)
-
-# >>> Then configure CORS on that app <<<
-# Allow local dev frontends + Netlify frontend
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "https://put-oportunity-finder.netlify.app",
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,      # explicit list of allowed origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# (now the rest of your code, e.g. ROLLING_DEFAULTS, routes, etc.)
 ROLLING_DEFAULTS = {
     "delta_min": float(os.getenv("ROLLING_DELTA_MIN", "0.20")),
     "delta_max": float(os.getenv("ROLLING_DELTA_MAX", "0.25")),
@@ -57,47 +23,53 @@ ROLLING_DEFAULTS = {
     "credit_max_pct": float(os.getenv("ROLLING_CREDIT_MAX_PCT", "0.008")),
 }
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+RISK_FREE_RATE = 0.04  # 4% annual risk-free rate (approx)
+
+# ---- Resolve provider at startup ----
+get_option_chain, DATA_PROVIDER = resolve_get_option_chain()
+
+# ---- Create FastAPI app ----
+app = FastAPI(
+    title="Put Opportunity Finder backend",
+    description=(
+        "Backend for rolling short PUT strategy helper.\n"
+        f"Active data provider: {DATA_PROVIDER}"
+    ),
+    version="2.0.0",
+)
+
+# ---- CORS ----
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://put-oportunity-finder.netlify.app",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "Put Opportunity Finder backend is running"}
-
-def _massive_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Small helper to call Massive's API with the API key and handle errors.
-    """
-    if not API_KEY:
-        raise RuntimeError("POLYGON_API_KEY is not set; cannot call Massive API.")
-
-    url = f"{BASE_URL}{path}"
-
-    # Copy params and add apiKey the way Massive expects it.
-    full_params: Dict[str, Any] = dict(params or {})
-    full_params["apiKey"] = API_KEY
-
-    headers = {
-        "accept": "application/json",
+    return {
+        "status": "ok",
+        "message": "Put Opportunity Finder backend is running",
+        "data_provider": DATA_PROVIDER,
     }
 
-    response = requests.get(url, headers=headers, params=full_params, timeout=10)
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=f"Massive API error {response.status_code}: {response.text}",
-        )
 
-    return response.json()
-
+# ---------------------------------------------------------------------------
+# Black–Scholes helpers
+# ---------------------------------------------------------------------------
 
 def _d1_d2(
     S: float, K: float, T: float, r: float, sigma: float
 ) -> (float, float):
-    """
-    Black-Scholes d1 and d2.
-    """
     if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
         raise ValueError("Invalid inputs to d1/d2.")
     d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
@@ -106,9 +78,6 @@ def _d1_d2(
 
 
 def _norm_cdf(x: float) -> float:
-    """
-    Standard normal CDF using error function.
-    """
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
@@ -123,19 +92,10 @@ def _implied_vol_put_bisection(
     sigma_low: float = 1e-4,
     sigma_high: float = 5.0,
 ) -> Optional[float]:
-    """
-    Very simple bisection solver for implied volatility of a European put
-    under Black–Scholes.
-
-    If it fails to converge, returns None.
-    """
-
     def bs_put_price(sigma: float) -> float:
         d1, d2 = _d1_d2(S, K, T, r, sigma)
         from math import exp
-
-        # Put price formula
-        return K * math.exp(-r * T) * _norm_cdf(-d2) - S * _norm_cdf(-d1)
+        return K * exp(-r * T) * _norm_cdf(-d2) - S * _norm_cdf(-d1)
 
     try:
         price_low = bs_put_price(sigma_low)
@@ -143,7 +103,6 @@ def _implied_vol_put_bisection(
     except ValueError:
         return None
 
-    # If market price outside bracket, we give up
     if not (price_low <= market_price <= price_high):
         return None
 
@@ -168,11 +127,6 @@ def _implied_vol_put_bisection(
 def _black_scholes_put_delta(
     S: float, K: float, T: float, r: float, sigma: float
 ) -> float:
-    """
-    Black–Scholes delta for a European put.
-
-    By convention for puts: delta is negative.
-    """
     d1, _ = _d1_d2(S, K, T, r, sigma)
     return _norm_cdf(d1) - 1.0  # negative
 
@@ -189,14 +143,7 @@ def _compute_model_delta_iv(
 ) -> (Optional[float], Optional[float]):
     """
     Compute delta and IV from Black–Scholes if vendor data is not available.
-
-    - We first derive a "market_price" from bid/ask/last.
-    - Then solve for IV via bisection.
-    - Then compute delta from that IV.
-
-    If we can't get a usable market price or the solver fails, returns (None, None).
     """
-    # 1) Decide what "market price" to use
     if bid is not None and ask is not None and bid > 0 and ask > 0:
         market_price = 0.5 * (bid + ask)
     elif last is not None and last > 0:
@@ -204,12 +151,10 @@ def _compute_model_delta_iv(
     else:
         return None, None
 
-    # 2) Solve IV
     iv = _implied_vol_put_bisection(market_price, S, K, T, r)
     if iv is None or iv <= 0:
         return None, None
 
-    # 3) Delta
     try:
         delta = _black_scholes_put_delta(S, K, T, r, iv)
     except ValueError:
@@ -218,139 +163,72 @@ def _compute_model_delta_iv(
     return delta, iv
 
 
+def _mid_price(
+    bid: Optional[float], ask: Optional[float], last: Optional[float]
+) -> Optional[float]:
+    if bid is not None and ask is not None and bid > 0 and ask > 0:
+        return 0.5 * (bid + ask)
+    if last is not None and last > 0:
+        return last
+    return None
+
+
 # ---------------------------------------------------------------------------
-# Simple chain endpoint (for debugging and UI support)
+# Simple chain endpoint (provider-agnostic)
 # ---------------------------------------------------------------------------
-
-
-def _fetch_simple_chain(
-    ticker: str, contract_type: str, expiration_date: str, limit: int = 200
-) -> List[Dict[str, Any]]:
-    """
-    Internal helper to fetch a simplified options chain (one side only)
-    from Massive's Option Chain Snapshot endpoint and return a clean list.
-    """
-
-    # Massive v3 Option Chain Snapshot:
-    #   GET /v3/snapshot/options/{underlyingAsset}
-    #
-    # We pass filters as query parameters.
-    params = {
-        "contract_type": contract_type,       # "put" or "call"
-        "expiration_date": expiration_date,   # "YYYY-MM-DD"
-        "limit": limit,
-        "sort": "strike_price",
-        "order": "asc",
-    }
-
-    path = f"/v3/snapshot/options/{ticker.upper()}"
-    data = _massive_get(path, params)
-
-    results: List[Dict[str, Any]] = []
-
-    for opt in data.get("results", []):
-        # --- Basic identifiers ---
-        details = (opt.get("details") or {})
-        underlying_asset = (opt.get("underlying_asset") or {})
-
-        underlying = (
-            underlying_asset.get("ticker")
-            or details.get("underlying_ticker")
-            or ticker.upper()
-        )
-        option_ticker = details.get("ticker") or details.get("symbol")
-        expiration = details.get("expiration_date")
-        strike = details.get("strike_price")
-
-        # --- Volume / open interest ---
-        day = (opt.get("day") or {})
-        volume = day.get("volume") or day.get("v")
-        oi = opt.get("open_interest")
-
-        # --- Greeks & IV ---
-        greeks = (opt.get("greeks") or {})
-        delta = greeks.get("delta")
-        gamma = greeks.get("gamma")
-        theta = greeks.get("theta")
-        vega = greeks.get("vega")
-
-        # Some plans return IV as top-level implied_volatility,
-        # older payloads may also include it in greeks["iv"].
-        iv = opt.get("implied_volatility") or greeks.get("iv")
-
-        # --- Quotes / last trade for mid price ---
-        last_quote = (opt.get("last_quote") or {})
-        # Option Chain Snapshot usually exposes bid/ask;
-        # fall back to bid_price/ask_price if needed.
-        bid = (
-            last_quote.get("bid")
-            or last_quote.get("bid_price")
-        )
-        ask = (
-            last_quote.get("ask")
-            or last_quote.get("ask_price")
-        )
-
-        last_trade = (opt.get("last_trade") or {})
-        # For options trades Massive uses "p" for price; also check "price".
-        last = last_trade.get("price") or last_trade.get("p")
-
-        put_mid = None
-        if bid is not None and ask is not None:
-            put_mid = (bid + ask) / 2.0
-        elif last is not None:
-            put_mid = last
-
-        greeks_source = "vendor" if (delta is not None and iv is not None) else "none"
-
-        results.append(
-            {
-                "underlying": underlying,
-                "option_ticker": option_ticker,
-                "contract_type": contract_type,
-                "expiration_date": expiration,
-                "strike_price": strike,
-                "bid": bid,
-                "ask": ask,
-                "put_mid": put_mid,
-                "last": last,
-                "volume": volume,
-                "open_interest": oi,
-                "delta": delta,
-                "gamma": gamma,
-                "theta": theta,
-                "vega": vega,
-                "iv": iv,
-                "greeks_source": greeks_source,
-            }
-        )
-
-    return results
-
 
 @app.get("/options-chain-simple/{ticker}")
 def get_simplified_options_chain(
     ticker: str,
     contract_type: str,
     expiration_date: str,
-    limit: int = 200,
 ):
     """
-    Simple debugging endpoint: returns a simplified Massive options chain
-    for a given ticker / type / expiration.
+    Simple debugging endpoint: returns a simplified options chain
+    for a given ticker / type / expiration from the active provider.
     """
-    chain = _fetch_simple_chain(ticker, contract_type, expiration_date, limit=limit)
+    contract_type = contract_type.lower()
+    if contract_type not in ("call", "put"):
+        raise HTTPException(status_code=400, detail="contract_type must be 'call' or 'put'")
+
+    contracts: List[OptionContract] = get_option_chain(ticker, expiration_date)
+    side = [c for c in contracts if c.option_type == contract_type]
+
+    options: List[Dict[str, Any]] = []
+    for c in side:
+        mid = _mid_price(c.bid, c.ask, c.last)
+        options.append(
+            {
+                "underlying": c.underlying,
+                "option_ticker": c.option_ticker,
+                "contract_type": c.option_type,
+                "expiration_date": c.expiry.isoformat(),
+                "strike_price": c.strike,
+                "bid": c.bid,
+                "ask": c.ask,
+                "put_mid": mid,
+                "last": c.last,
+                "volume": c.volume,
+                "open_interest": c.open_interest,
+                "delta": c.delta,
+                "gamma": c.gamma,
+                "theta": c.theta,
+                "vega": c.vega,
+                "iv": c.implied_vol,
+                "greeks_source": c.greeks_source,
+            }
+        )
+
     return {
         "status": "OK",
-        "count": len(chain),
-        "options": chain,
+        "count": len(options),
+        "options": options,
     }
 
 
 # ---------------------------------------------------------------------------
-# Rolling PUT strategy endpoint
+# Rolling PUT strategy endpoint (provider-agnostic)
 # ---------------------------------------------------------------------------
-
 
 @app.get("/rolling-put-candidates/{ticker}")
 def rolling_put_candidates(
@@ -363,37 +241,15 @@ def rolling_put_candidates(
     credit_max_pct: float = ROLLING_DEFAULTS["credit_max_pct"],
 ):
     """
-    Strategy endpoint for the app.
-
-    For the given ticker + expiration:
-
-      * finds an approximate ATM strike using CALL deltas,
-      * computes EM from the ATM straddle (call mid + put mid),
-      * approximates spot as that ATM strike,
-      * computes lower band = spot_approx - EM,
-      * returns PUTs with |delta| between delta_min and delta_max,
-        plus some extra fields for the UI (neighbors, score, etc.).
+    Strategy endpoint for the app, using the active data provider.
     """
 
-    # --- 1) Fetch simplified PUT chain for this expiration ---
-    put_params = {
-        "contract_type": "put",
-        "expiration_date": expiration_date,
-        "limit": 200,
-    }
-    call_params = {
-        "contract_type": "call",
-        "expiration_date": expiration_date,
-        "limit": 200,
-    }
+    # --- 1) Fetch full chain for this expiration from provider ---
+    contracts: List[OptionContract] = get_option_chain(ticker, expiration_date)
+    call_chain = [c for c in contracts if c.option_type == "call"]
+    put_chain = [c for c in contracts if c.option_type == "put"]
 
-    put_chain = _fetch_simple_chain(ticker, **put_params)
-    call_chain = _fetch_simple_chain(ticker, **call_params)
-
-    # If there is no usable chain for this expiration, return an
-    # empty payload instead of raising 404 so the UI can show a
-    # friendly “no data for this expiration” message.
-    if not put_chain or not call_chain:
+    if not call_chain or not put_chain:
         return {
             "status": "NO_DATA",
             "ticker": ticker.upper(),
@@ -410,42 +266,72 @@ def rolling_put_candidates(
             "incomplete": [],
         }
 
-    # --- 2) Determine approximate ATM strike from CALL deltas ---
-    # Keep only calls with non-null delta
-    valid_calls = [c for c in call_chain if c["delta"] is not None]
+    # --- 2) Determine approximate ATM strike and spot ---
 
-    if not valid_calls:
-        raise HTTPException(
-            status_code=404,
-            detail="No valid CALL deltas found to determine ATM strike.",
-        )
+    # 2.1. Primero intentamos con deltas de CALL (caso Tradier)
+    valid_calls = [c for c in call_chain if c.delta is not None]
 
-    # For calls: ATM delta ~ +0.5 (depending on convention).
-    # We choose the strike whose delta is closest to 0.5
-    def call_delta_distance(opt: Dict[str, Any]) -> float:
-        return abs(abs(opt["delta"]) - 0.5)
+    if valid_calls:
+        def call_delta_distance(c: OptionContract) -> float:
+            return abs(abs(c.delta) - 0.5)
 
-    atm_call = min(valid_calls, key=call_delta_distance)
-    atm_strike = atm_call["strike_price"]
+        atm_call = min(valid_calls, key=call_delta_distance)
+        atm_strike = atm_call.strike
+
+        # Spot aproximado = strike ATM (como antes)
+        spot_approx = float(atm_strike)
+
+    else:
+        # 2.2. Fallback genérico (caso Yahoo / proveedor sin deltas)
+        # Usamos paridad C - P + K para estimar el spot S en cada strike
+        def _mid_opt(c: OptionContract) -> Optional[float]:
+            return _mid_price(c.bid, c.ask, c.last)
+
+        # Construimos diccionarios strike -> mid
+        call_mids = {c.strike: _mid_opt(c) for c in call_chain}
+        put_mids = {p.strike: _mid_opt(p) for p in put_chain}
+
+        spot_estimates = []
+
+        for strike, c_mid in call_mids.items():
+            p_mid = put_mids.get(strike)
+            if c_mid is None or p_mid is None:
+                continue
+            # Paridad aproximada (ignoramos descuento)
+            S_est = c_mid - p_mid + strike
+            spot_estimates.append((strike, S_est))
+
+        if not spot_estimates:
+            raise HTTPException(
+                status_code=404,
+                detail="Cannot determine ATM strike: no usable CALL/PUT mid prices.",
+            )
+
+        # Spot aproximado = mediana de los S_est
+        s_values = [s for _, s in spot_estimates]
+        s_values.sort()
+        mid_idx = len(s_values) // 2
+        if len(s_values) % 2 == 1:
+            spot_approx = float(s_values[mid_idx])
+        else:
+            spot_approx = float(0.5 * (s_values[mid_idx - 1] + s_values[mid_idx]))
+
+        # Elegimos como ATM el strike más cercano a ese spot aproximado
+        strikes = [k for k, _ in spot_estimates]
+        atm_strike = min(strikes, key=lambda k: abs(k - spot_approx))
+
+        # Y tomamos cualquier CALL con ese strike
+        atm_call = next(c for c in call_chain if c.strike == atm_strike)
 
     # --- 3) Estimate EM from ATM straddle mid prices ---
-    # Find the corresponding PUT (same strike) if possible
-    atm_put = next(
-        (p for p in put_chain if p["strike_price"] == atm_strike), None
-    )
+    atm_put = next((p for p in put_chain if p.strike == atm_strike), None)
 
-    call_mid = atm_call.get("put_mid")  # for calls this is still mid price
-    if call_mid is None:
-        # fallback to last
-        call_mid = atm_call.get("last")
+    call_mid = _mid_price(atm_call.bid, atm_call.ask, atm_call.last)
+    put_mid_atm = _mid_price(
+        atm_put.bid, atm_put.ask, atm_put.last
+    ) if atm_put is not None else None
 
-    put_mid = None
-    if atm_put is not None:
-        put_mid = atm_put.get("put_mid")
-        if put_mid is None:
-            put_mid = atm_put.get("last")
-
-    if call_mid is None or put_mid is None:
+    if call_mid is None or put_mid_atm is None:
         return {
             "status": "NO_DATA",
             "message": "Cannot compute EM: missing prices at ATM for this expiration.",
@@ -457,54 +343,47 @@ def rolling_put_candidates(
             },
         }
 
-    em = call_mid + put_mid
+    em = call_mid + put_mid_atm
 
-    # --- 4) Approximate spot as atm_strike (reasonable for near ATM) ---
-    spot_approx = float(atm_strike)
-
-    # --- 5) Compute lower band ---
+    # --- 4) Compute lower band ---
     lower_band = spot_approx - em
 
-    # --- 6) Compute time to expiration (T in years) for BS model ---
+    # --- 5) Compute time to expiration (T in years) ---
     try:
         exp_dt = datetime.strptime(expiration_date, "%Y-%m-%d")
         today = datetime.utcnow()
         days_to_exp = max((exp_dt - today).days, 1)
         T = days_to_exp / 365.0
     except Exception:
-        # If anything goes wrong, fallback to 30 days
         T = 30.0 / 365.0
 
-    # --- 7) Build list of PUT opportunities ---
+    # --- 6) Build list of PUT opportunities ---
     opportunities: List[Dict[str, Any]] = []
     neighbors: List[Dict[str, Any]] = []
     incomplete: List[Dict[str, Any]] = []
 
-    # First build a list of enriched puts with computed fields
     enriched_puts: List[Dict[str, Any]] = []
 
     for opt in put_chain:
-        strike = opt["strike_price"]
-        last = opt["last"]
-        put_mid = opt["put_mid"]
-        delta = opt["delta"]
-        iv = opt["iv"]
-        greeks_source = opt["greeks_source"]
+        strike = opt.strike
+        last = opt.last
+        bid = opt.bid
+        ask = opt.ask
+        mid_price = _mid_price(bid, ask, last)
 
-        # 7.1 Compute mid price if not already present
-        mid_price = put_mid
-        if mid_price is None and last is not None:
-            mid_price = last
+        delta = opt.delta
+        iv = opt.implied_vol
+        greeks_source = opt.greeks_source
 
-        # 7.2 If vendor delta/iv are missing, try to compute them
+        # If vendor delta/iv are missing, try to compute them
         if delta is None or iv is None:
             model_delta, model_iv = _compute_model_delta_iv(
                 S=spot_approx,
                 K=strike,
                 T=T,
                 r=RISK_FREE_RATE,
-                bid=opt.get("bid"),
-                ask=opt.get("ask"),
+                bid=bid,
+                ask=ask,
                 last=last,
             )
             if model_delta is not None and model_iv is not None:
@@ -520,12 +399,12 @@ def rolling_put_candidates(
 
             incomplete.append(
                 {
-                    "option_ticker": opt["option_ticker"],
+                    "option_ticker": opt.option_ticker,
                     "strike_price": strike,
                     "last": last,
                     "put_mid": mid_price,
-                    "volume": opt["volume"],
-                    "open_interest": opt["open_interest"],
+                    "volume": opt.volume,
+                    "open_interest": opt.open_interest,
                     "distance_to_lower_band": strike - lower_band,
                     "credit_pct": credit_pct,
                     "iv": iv,
@@ -535,7 +414,7 @@ def rolling_put_candidates(
             )
             continue
 
-        # 7.3 Compute credit % from mid price
+        # Compute credit % from mid price
         if mid_price is not None and spot_approx > 0:
             credit_pct = mid_price / spot_approx
         else:
@@ -545,32 +424,28 @@ def rolling_put_candidates(
 
         enriched_puts.append(
             {
-                "option_ticker": opt["option_ticker"],
+                "option_ticker": opt.option_ticker,
                 "strike_price": strike,
                 "last": last,
                 "put_mid": mid_price,
                 "delta": delta,
                 "iv": iv,
                 "greeks_source": greeks_source,
-                "volume": opt["volume"],
-                "open_interest": opt["open_interest"],
+                "volume": opt.volume,
+                "open_interest": opt.open_interest,
                 "distance_to_lower_band": distance,
                 "credit_pct": credit_pct,
             }
         )
 
-    # 7.4 Filter enriched puts by band window, delta, and credit
-    #     We treat "opportunities" as those satisfying all filters;
-    #     neighbors will be added around them.
+    # 6.4 Filter enriched puts by band window, delta, and credit
     filtered: List[Dict[str, Any]] = []
     for row in enriched_puts:
         s = row["strike_price"]
         d = abs(row["delta"])
         cp = row["credit_pct"]
 
-        in_band = (s >= (lower_band - band_window)) and (
-            s <= (lower_band + band_window)
-        )
+        in_band = (s >= (lower_band - band_window)) and (s <= (lower_band + band_window))
         in_delta = (d >= delta_min) and (d <= delta_max)
         in_credit = (
             cp is not None
@@ -585,17 +460,14 @@ def rolling_put_candidates(
         if in_band and in_delta and in_credit:
             filtered.append(row)
 
-    # 7.5 If nothing passes all filters, we may still want rows that pass
-    #     at least the band filter so that UI can show some context.
+    # 6.5 Fallback to looser criteria if nothing passes all filters
     if not filtered:
         for row in enriched_puts:
             s = row["strike_price"]
             d = abs(row["delta"])
             cp = row["credit_pct"]
 
-            in_band = (s >= (lower_band - band_window)) and (
-                s <= (lower_band + band_window)
-            )
+            in_band = (s >= (lower_band - band_window)) and (s <= (lower_band + band_window))
             in_delta = (d >= delta_min) and (d <= delta_max)
             in_credit = (
                 cp is not None
@@ -610,8 +482,7 @@ def rolling_put_candidates(
             if in_band and (in_delta or in_credit):
                 filtered.append(row)
 
-    # 7.6 Mark opportunities and neighbors
-    # Sort by strike
+    # 6.6 Mark opportunities and neighbors
     filtered.sort(key=lambda r: r["strike_price"])
 
     if filtered:
@@ -620,7 +491,6 @@ def rolling_put_candidates(
 
         opp_strikes = [r["strike_price"] for r in filtered]
 
-        # Helper to find index in strikes_sorted
         def idx_of(strike: float) -> int:
             return strikes_sorted.index(strike)
 
@@ -632,12 +502,10 @@ def rolling_put_candidates(
             if i + 1 < len(strikes_sorted):
                 neighbor_indices.add(strikes_sorted[i + 1])
 
-        # Build final opportunities list
         for row in filtered:
             row["type"] = "opportunity"
             opportunities.append(row)
 
-        # Build neighbors list (excluding already chosen opportunities)
         opp_strike_set = set(opp_strikes)
         for row in enriched_puts:
             s = row["strike_price"]
@@ -649,10 +517,9 @@ def rolling_put_candidates(
                 r.setdefault("meets_credit", False)
                 neighbors.append(r)
 
-        # Sort neighbors by strike as well
         neighbors.sort(key=lambda r: r["strike_price"])
 
-    # Build final response
+    # Final response
     return {
         "status": "OK",
         "ticker": ticker.upper(),
