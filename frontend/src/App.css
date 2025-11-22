@@ -315,22 +315,26 @@ body {
 }
 
 /* Row coloring by classification */
+
+/* BEST + OPPORTUNITY (banda + delta + crédito) → verde */
 .row-best {
-  /* strongest green: best full-match (★) */
-  background: #16653433;
+  /* green, más intenso */
+  background: rgba(34, 197, 94, 0.35);   /* aprox tailwind green-500 */
 }
 
+/* CANDIDATE_STRONG (banda + delta ó banda + crédito) → amarillo */
 .row-opportunity {
-  /* medium green: other full-matches (✓) */
-  background: #15803d22;
+  /* amarillo de advertencia */
+  background: rgba(234, 179, 8, 0.30);   /* aprox amber-400 */
 }
 
+/* CANDIDATE (solo banda) → rojizo muy suave */
 .row-candidate {
-  /* light green: candidates (○) */
-  background: #16a34a1a;
+  /* rojo suave (riesgo más alto) */
+  background: rgba(248, 113, 113, 0.25); /* aprox red-400 */
 }
 
-/* neighbors: neutral, no green background */
+/* Neighbors: neutro, sin color */
 .row-neighbor {
   background: transparent;
 }

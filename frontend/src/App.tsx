@@ -54,7 +54,12 @@ interface RollingResponse {
 
 type Profile = "Conservative" | "Normal" | "Aggressive" | "Custom";
 
-type Classification = "best" | "opportunity" | "candidate" | "neighbor";
+type Classification =
+  | "best"
+  | "opportunity"       // banda + delta + crédito (full match, no-best)
+  | "candidate_strong"  // banda + (solo delta o solo crédito)
+  | "candidate"         // solo banda
+  | "neighbor";
 
 interface ClassifiedRow extends OpportunityRow {
   classification: Classification;
@@ -84,20 +89,25 @@ function classifyRow(row: OpportunityRow): Classification {
     return "neighbor";
   }
 
+  // Fuera de la banda (caso raro en opportunities) → vecino / neutro
+  if (!meets_band) {
+    return "neighbor";
+  }
+
   // Full match: banda + delta + crédito
-  const isFullMatch = meets_band && meets_delta && meets_credit;
-  if (isFullMatch) {
-    return "opportunity";
+  if (meets_delta && meets_credit) {
+    return "opportunity"; // luego uno de estos se promociona a "best"
   }
 
-  // Cualquier fila dentro de la banda que NO sea full match es CANDIDATE
-  if (meets_band) {
-    return "candidate";
+  // Banda + (solo delta o solo crédito) → candidato “fuerte”
+  if (meets_delta !== meets_credit) {
+    return "candidate_strong";
   }
 
-  // Fuera de banda (caso raro en opportunities) → neutro
-  return "neighbor";
+  // Solo banda (ni delta ni crédito) → candidato “suave”
+  return "candidate";
 }
+
 
 function formatProviderLabel(p: string | null): string {
   if (!p) return "Unknown (check backend)";
@@ -129,16 +139,19 @@ function scoreForClassification(c: Classification): string {
 function rowClassForClassification(c: Classification): string {
   switch (c) {
     case "best":
-      // fila BEST (★) – verde más fuerte
+      // BEST (★) y OPPORTUNITY full pueden compartir el tono más intenso
       return "row-best";
     case "opportunity":
-      // fila OPPORTUNITY (✓) – verde medio
+      // Full match (banda + delta + crédito, sin ser BEST)
+      return "row-best";
+    case "candidate_strong":
+      // Banda + (solo delta o solo crédito) → verde intermedio
       return "row-opportunity";
     case "candidate":
-      // CANDIDATE – verde claro
+      // Solo banda → verde más claro
       return "row-candidate";
     case "neighbor":
-      // Neighbors – estilo neutro
+      // Vecinos → neutro
       return "row-neighbor";
     default:
       return "";
