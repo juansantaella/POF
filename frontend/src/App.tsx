@@ -79,27 +79,23 @@ interface QueryParams {
 function classifyRow(row: OpportunityRow): Classification {
   const { type, meets_band, meets_delta, meets_credit } = row;
 
-  // Neighbors are always neutral: show row for context, but no badge / highlight
+  // Vecinos siempre son "neighbor": solo contexto, sin highlight
   if (type === "neighbor") {
     return "neighbor";
   }
 
-  // From here we know it's an opportunity row
+  // Full match: banda + delta + crédito
   const isFullMatch = meets_band && meets_delta && meets_credit;
   if (isFullMatch) {
-    // Full-match (within band, credit, and delta)
     return "opportunity";
   }
 
-  // Candidate: in band and meeting exactly one of delta / credit (but not both)
-  const hasDelta = !!meets_delta;
-  const hasCredit = !!meets_credit;
-  if (meets_band && hasDelta !== hasCredit) {
-    // Within band, and meets either credit or delta, but not both
+  // Cualquier fila dentro de la banda que NO sea full match es CANDIDATE
+  if (meets_band) {
     return "candidate";
   }
 
-  // Any other edge-case opportunity → treat as neutral (no badge, no green)
+  // Fuera de banda (caso raro en opportunities) → neutro
   return "neighbor";
 }
 
@@ -116,21 +112,35 @@ function formatProviderLabel(p: string | null): string {
 }
 
 function scoreForClassification(c: Classification): string {
-  if (c === "best") return "★";   // BEST
-  if (c === "oportunity") return "✓"; // OPPORTUNITY
-  return "";                      // CANDIDATES + neighbors: no symbol
+  switch (c) {
+    case "best":
+      // Row that meets band + delta + credit and has the BEST credit
+      return "★";      // BEST
+    case "opportunity":
+      // Row that meets band + delta + credit (full match, but not the best)
+      return "✓";      // OPPORTUNITY
+    default:
+      // Candidates (band only or band + one filter) and neighbors
+      // should NOT show any symbol in the Score column
+      return "";
+  }
 }
 
 function rowClassForClassification(c: Classification): string {
   switch (c) {
     case "best":
+      // fila BEST (★) – verde más fuerte
       return "row-best";
     case "opportunity":
+      // fila OPPORTUNITY (✓) – verde medio
       return "row-opportunity";
     case "candidate":
+      // CANDIDATE – verde claro
       return "row-candidate";
+    case "neighbor":
+      // Neighbors – estilo neutro
+      return "row-neighbor";
     default:
-      // Neighbors / context rows: keep base table styling, no green highlight
       return "";
   }
 }
