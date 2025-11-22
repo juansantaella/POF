@@ -316,17 +316,21 @@ body {
 
 /* Row coloring by classification */
 .row-best {
+  /* strongest green: best full-match (★) */
   background: #16653433;
 }
 
-.row-strong {
+.row-opportunity {
+  /* medium green: other full-matches (✓) */
   background: #15803d22;
 }
 
-.row-weak {
+.row-candidate {
+  /* light green: candidates (○) */
   background: #16a34a1a;
 }
 
+/* neighbors: neutral, no green background */
 .row-neighbor {
   background: transparent;
 }
