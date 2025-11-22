@@ -116,21 +116,9 @@ function formatProviderLabel(p: string | null): string {
 }
 
 function scoreForClassification(c: Classification): string {
-  // Badge in the "Score" column:
-  // ★ → best full-match in that expiration
-  // ✓ → other full-matches
-  // ○ → candidates (partial matches inside band)
-  // "" → neighbors / context rows (no badge)
-  switch (c) {
-    case "best":
-      return "★";
-    case "opportunity":
-      return "✓";
-    case "candidate":
-      return "○";
-    default:
-      return "";
-  }
+  if (c === "best") return "★";   // BEST
+  if (c === "oportunity") return "✓"; // OPPORTUNITY
+  return "";                      // CANDIDATES + neighbors: no symbol
 }
 
 function rowClassForClassification(c: Classification): string {
