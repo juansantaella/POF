@@ -7,7 +7,7 @@ const API_BASE =
 
 const REFRESH_INTERVAL_MS = 10000; // 10 seconds
 
-const COMMON_TICKERS = ["AAPL", "AMZN", "MSFT", "SPY", "QQQ", "TSLA", "META", "NVDA"];
+// const COMMON_TICKERS = ["AAPL", "AMZN", "MSFT", "SPY", "QQQ", "TSLA", "META", "NVDA"];
 
 interface BaseOptionRow {
   option_ticker: string;
