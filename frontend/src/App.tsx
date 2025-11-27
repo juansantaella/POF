@@ -460,9 +460,27 @@ useEffect(() => {
     }
   }
 
-  function handleFactoryReset() {
-    applyProfile("Normal");
+function handleFactoryReset() {
+  // 1) Volver al perfil Normal (sliders y parámetros numéricos)
+  applyProfile("Normal");
+
+  // 2) Limpiar Ticker y Expiration en la UI
+  setTicker("");
+  setExpiration("");
+
+  // 3) Opcional pero recomendable: limpiar resultados y estado
+  setRecords([]);
+  setLastQuery(null);
+  setError(null);
+
+  // 4) Eliminar los valores recordados en localStorage
+  try {
+    window.localStorage.removeItem(LS_KEY_TICKER);
+    window.localStorage.removeItem(LS_KEY_EXPIRATION);
+  } catch {
+    // Si falla localStorage (modo privado, etc.), no rompemos la app
   }
+}
 
   // Handlers for sliders / numeric inputs
   const handleDeltaMaxChange = (val: number) => {
