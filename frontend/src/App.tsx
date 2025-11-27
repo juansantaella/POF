@@ -7,7 +7,9 @@ const API_BASE =
 
 const REFRESH_INTERVAL_MS = 10000; // 10 seconds
 
-// const COMMON_TICKERS = ["AAPL", "AMZN", "MSFT", "SPY", "QQQ", "TSLA", "META", "NVDA"];
+// NUEVO: claves para recordar últimos valores
+const LS_KEY_TICKER = "pof:lastTicker";
+const LS_KEY_EXPIRATION = "pof:lastExpiration";
 
 interface BaseOptionRow {
   option_ticker: string;
@@ -234,8 +236,8 @@ function App() {
   const BAND_MAX = 10;
 
   // Control panel state
-  const [ticker, setTicker] = useState("AAPL");
-  const [expiration, setExpiration] = useState("2025-11-28");
+  const [ticker, setTicker] = useState("");
+  const [expiration, setExpiration] = useState("");
 
   // We keep a fixed lower bound for |Δ| and only expose Max Δ to the user
   const [deltaMin, setDeltaMin] = useState(DELTA_MAX_MIN);
@@ -335,20 +337,45 @@ function App() {
     }
   }
 
-  function handleLoadClick() {
-    const params: QueryParams = {
-      ticker,
-      expiration,
-      deltaMin,
-      deltaMax,
-      bandWindow,
-      creditMin,
-      creditMax,
-      showNeighbors,
-      numExpirations,
-    };
-    fetchAll(params);
+function handleLoadClick() {
+  const cleanTicker = ticker.trim().toUpperCase();
+  const cleanExpiration = expiration.trim();
+
+  // Validación opcional: no llamar al backend si faltan datos
+  if (!cleanTicker || !cleanExpiration) {
+    setError("Please enter both ticker and base expiration before loading opportunities.");
+    setRecords([]);
+    setLastQuery(null);
+    return;
   }
+
+  // Normalizar estado con los valores limpiados
+  if (cleanTicker !== ticker) {
+    setTicker(cleanTicker);
+  }
+
+  // Guardar últimos valores en localStorage
+  try {
+    window.localStorage.setItem(LS_KEY_TICKER, cleanTicker);
+    window.localStorage.setItem(LS_KEY_EXPIRATION, cleanExpiration);
+  } catch {
+    // Si localStorage falla, simplemente seguimos sin romper la app
+  }
+
+  const params: QueryParams = {
+    ticker: cleanTicker,
+    expiration: cleanExpiration,
+    deltaMin,
+    deltaMax,
+    bandWindow,
+    creditMin,
+    creditMax,
+    showNeighbors,
+    numExpirations,
+  };
+
+  fetchAll(params);
+}
 
   // Fetch backend info (including active data provider) once on mount
   useEffect(() => {
@@ -366,6 +393,23 @@ function App() {
     }
     fetchBackendInfo();
   }, []);
+
+  // NUEVO: restaurar último ticker/expiration usados (si existen)
+useEffect(() => {
+  try {
+    const savedTicker = window.localStorage.getItem(LS_KEY_TICKER);
+    const savedExpiration = window.localStorage.getItem(LS_KEY_EXPIRATION);
+
+    if (savedTicker) {
+      setTicker(savedTicker.toUpperCase());
+    }
+    if (savedExpiration) {
+      setExpiration(savedExpiration);
+    }
+  } catch {
+    // En caso de error (modo privado, etc.), no hacemos nada
+  }
+}, []);
 
   // Auto-refresh timer
   useEffect(() => {
@@ -685,7 +729,7 @@ function App() {
             <button
               className="primary-btn"
               onClick={handleLoadClick}
-              disabled={loading}
+              disabled={loading || !ticker.trim() || !expiration.trim()}
             >
               {loading ? "Loading…" : "Load opportunities"}
             </button>
